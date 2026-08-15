@@ -2,6 +2,7 @@ import os
 import io
 import json
 import base64
+import datetime
 import urllib.request
 import urllib.parse
 import flet as ft
@@ -13,27 +14,32 @@ SUPABASE_URL = "https://qygefxheemltsaampjbh.supabase.co"
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_publishable_-ra_ou-i5SnqG-aItNPJzg_RtkWYYyC")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# --- إعدادات الذكاء الاصطناعي (Gemini) بمفتاحك ---
+# --- إعدادات الذكاء الاصطناعي (Gemini) ---
 _k_parts = ["AQ.Ab8RN6KIkzTRIuUh", "7FC4cCYVxsS419zLlFu", "RNh6oxaLO5KThzQ"]
 DEFAULT_GEMINI_KEY = "".join(_k_parts)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", DEFAULT_GEMINI_KEY)
 
 
 def main(page: ft.Page):
-    page.title = "Triple H - نظام الشحنات المتكامل"
+    page.title = "Triple H - إدارة الشحنات"
     page.theme_mode = ft.ThemeMode.LIGHT
     page.rtl = True
     page.scroll = "auto"
     page.padding = 10
 
+    today_str = datetime.date.today().strftime("%Y-%m-%d")
+
     selected_order_id = {"id": None}
     current_orders_data = {"rows": []}
 
+    # عناصر عرض الإحصائيات
     stat_shipping = ft.Text("0.00 EGP", size=14, weight="bold", color="#1d4ed8")
     stat_items = ft.Text("0.00 EGP", size=14, weight="bold", color="#b45309")
     stat_total = ft.Text("0.00 EGP", size=15, weight="bold", color="#047857")
     stat_count = ft.Text("0", size=15, weight="bold", color="#1e293b")
 
+    # حقول إدخال وتعديل البيانات
+    session_date_in = ft.TextField(label="تاريخ الجلسة (YYYY-MM-DD)", value=today_str, text_align=ft.TextAlign.RIGHT)
     code_in = ft.TextField(label="كود الشحنة (تلقائي/يدوي)", text_align=ft.TextAlign.RIGHT)
     name_in = ft.TextField(label="اسم العميل (المستلم)", text_align=ft.TextAlign.RIGHT)
     phone_in = ft.TextField(label="رقم الهاتف", keyboard_type=ft.KeyboardType.PHONE, text_align=ft.TextAlign.RIGHT)
@@ -54,11 +60,22 @@ def main(page: ft.Page):
         ]
     )
 
+    # قائمة اختيار الجلسات المنسدلة (Scrollable Dropdown)
+    filter_session_dd = ft.Dropdown(
+        label="📅 اختيار الجلسة",
+        value=f"جلسة اليوم ({today_str})",
+        expand=True,
+        options=[
+            ft.dropdown.Option(f"جلسة اليوم ({today_str})"),
+            ft.dropdown.Option("كل الجلسات")
+        ]
+    )
+
     search_in = ft.TextField(label="🔍 بحث (كود، اسم، هاتف، مندوب)", text_align=ft.TextAlign.RIGHT, expand=True)
     filter_status_dd = ft.Dropdown(
-        label="فلترة بالحالة",
+        label="الحالة",
         value="كل الحالات",
-        width=150,
+        width=130,
         options=[
             ft.dropdown.Option("كل الحالات"),
             ft.dropdown.Option("قيد الانتظار"),
@@ -76,7 +93,7 @@ def main(page: ft.Page):
     btn_delete = ft.ElevatedButton("🗑️ حذف", icon=ft.Icons.DELETE, bgcolor="#ef4444", color="white", height=45, visible=False)
     btn_clear = ft.OutlinedButton("🔄 تفريغ", height=45)
 
-    form_title = ft.Text("➕ إضافة شحنة جديدة", weight="bold", size=16, color="#0f766e")
+    form_title = ft.Text(" بيانات الأوردر ", weight="bold", size=16, color="#0f766e")
 
     def show_msg(text, color="green"):
         snack = ft.SnackBar(ft.Text(text), bgcolor=color)
@@ -84,8 +101,32 @@ def main(page: ft.Page):
         snack.open = True
         page.update()
 
+    def update_mobile_sessions():
+        """جلب كل الجلسات السابقة وتعبئة القائمة المنسدلة"""
+        try:
+            res = supabase.table("orders").select("session_date").order("session_date", desc=True).execute()
+            dates = []
+            for item in (res.data or []):
+                d = item.get("session_date")
+                if d and d not in dates:
+                    dates.append(d)
+
+            opts = [
+                ft.dropdown.Option(f"جلسة اليوم ({today_str})"),
+                ft.dropdown.Option("كل الجلسات")
+            ]
+            for d in dates:
+                if d != today_str:
+                    opts.append(ft.dropdown.Option(d))
+
+            filter_session_dd.options = opts
+            page.update()
+        except Exception:
+            pass
+
     def clear_fields(e=None):
         selected_order_id["id"] = None
+        session_date_in.value = today_str
         code_in.value = ""
         name_in.value = ""
         phone_in.value = ""
@@ -96,7 +137,7 @@ def main(page: ft.Page):
         notes_in.value = ""
         status_dd.value = "قيد الانتظار"
 
-        form_title.value = "➕ إضافة شحنة جديدة"
+        form_title.value = " بيانات الأوردر "
         form_title.color = "#0f766e"
         btn_add.visible = True
         btn_update.visible = False
@@ -105,6 +146,7 @@ def main(page: ft.Page):
 
     def select_order_for_edit(item):
         selected_order_id["id"] = item.get("id")
+        session_date_in.value = str(item.get("session_date") or today_str)
         code_in.value = str(item.get("order_code") or "")
         name_in.value = str(item.get("customer_name") or "")
         phone_in.value = str(item.get("phone") or "")
@@ -147,21 +189,22 @@ def main(page: ft.Page):
             show_msg("لا توجد أوردرات معروضة لمشاركتها!", color="orange")
             return
 
-        lines = ["📦 *كشف تسليم الشحنات - Triple H*", "-------------------------"]
+        sess_name = filter_session_dd.value or "جميع الجلسات"
+        lines = [f"📦 *كشف تسليم شحنات ({sess_name}) - Triple H*", "-------------------------"]
         total_collect = 0.0
         for idx, r in enumerate(current_orders_data["rows"], 1):
             tot = float(r.get('item_price') or 0) + float(r.get('shipping_fee') or 0)
             total_collect += tot
             lines.append(f"{idx}) #{r.get('order_code')} - {r.get('customer_name')}")
             lines.append(f"📞 {r.get('phone')} | 📍 {r.get('address')}")
-            lines.append(f"💵 المطلوب تحصيله: {tot:.2f} EGP")
+            lines.append(f"💵 المطلوب: {tot:.2f} EGP")
             lines.append("-------------------------")
 
-        lines.append(f"💰 *إجمالي التحصيل المطلوب: {total_collect:,.2f} EGP*")
+        lines.append(f"💰 *إجمالي تحصيل الجلسة: {total_collect:,.2f} EGP*")
         full_text = "\n".join(lines)
         page.launch_url(f"https://wa.me/?text={urllib.parse.quote(full_text)}")
 
-    # --- معالجة وقراءة الصورة عبر الكشف التلقائي للنماذج النشطة ---
+    # --- معالجة وقراءة الصورة عبر AI ---
     def process_image_with_ai(file_path=None, file_bytes=None):
         if not GEMINI_API_KEY:
             show_msg("مفتاح Gemini غير مفعل!", color="red")
@@ -184,8 +227,8 @@ def main(page: ft.Page):
             img_b64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
             prompt_text = """
-            أنت مساعد ذكي لاستخراج بيانات شحنات التوصيل وبوالص الشحن (سواء كانت مكتوبة بخط اليد أو مطبوعة).
-            استخرج البيانات بصيغة JSON فقط بدون أي نصوص إضافية:
+            أنت مساعد ذكي لاستخراج بيانات شحنات التوصيل وبوالص الشحن.
+            استخرج البيانات بصيغة JSON فقط:
             {
                 "order_code": "كود الشحنة أو رقم البوليصة إن وجد",
                 "customer_name": "اسم العميل المستلم",
@@ -214,27 +257,13 @@ def main(page: ft.Page):
                 ]
             }
 
-            target_models = []
-            try:
-                list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
-                req_list = urllib.request.Request(list_url, headers={"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY})
-                with urllib.request.urlopen(req_list, timeout=10) as resp:
-                    if resp.status == 200:
-                        data_models = json.loads(resp.read().decode("utf-8"))
-                        for m in data_models.get("models", []):
-                            if "generateContent" in m.get("supportedGenerationMethods", []):
-                                target_models.append(m["name"])
-            except Exception:
-                pass
-
-            if not target_models:
-                target_models = [
-                    "models/gemini-2.0-flash",
-                    "models/gemini-1.5-flash",
-                    "models/gemini-1.5-flash-8b",
-                    "models/gemini-1.5-pro",
-                    "models/gemini-pro"
-                ]
+            target_models = [
+                "models/gemini-2.0-flash",
+                "models/gemini-1.5-flash",
+                "models/gemini-1.5-flash-8b",
+                "models/gemini-1.5-pro",
+                "models/gemini-pro"
+            ]
 
             response_json = None
             last_err_msg = ""
@@ -242,7 +271,6 @@ def main(page: ft.Page):
             for full_model_name in target_models:
                 clean_name = full_model_name.replace("models/", "")
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{clean_name}:generateContent?key={GEMINI_API_KEY}"
-                
                 req = urllib.request.Request(
                     url,
                     data=json.dumps(payload).encode("utf-8"),
@@ -261,16 +289,11 @@ def main(page: ft.Page):
             if not response_json:
                 raise Exception(f"فشل الاتصال: {last_err_msg}")
 
-            # استخراج النص بطريقة آمنة
             candidates = response_json.get("candidates", [])
             if not candidates:
-                raise Exception("لم يتم العثور على نتيجة من الذكاء الاصطناعي")
-            
-            first_candidate = candidates[0]
-            parts = first_candidate.get("content", {}).get("parts", [])
-            if not parts:
                 raise Exception("رد الذكاء الاصطناعي فارغ")
             
+            parts = candidates[0].get("content", {}).get("parts", [])
             raw_text = parts[0].get("text", "").strip()
 
             if raw_text.startswith("```json"):
@@ -321,13 +344,20 @@ def main(page: ft.Page):
         except Exception as ex:
             show_msg("خطأ في مستعرض الصور: " + str(ex), color="red")
 
+    # --- جلب البيانات مع الفلترة بالجلسة ---
     def load_orders(e=None):
         orders_list.controls.clear()
+        selected_sess = filter_session_dd.value
         search_txt = search_in.value.strip() if search_in.value else ""
         selected_status = filter_status_dd.value
 
         try:
             query = supabase.table("orders").select("*")
+
+            if selected_sess == f"جلسة اليوم ({today_str})":
+                query = query.eq("session_date", today_str)
+            elif selected_sess and selected_sess != "كل الجلسات":
+                query = query.eq("session_date", selected_sess)
 
             if search_txt:
                 pattern = "%" + search_txt + "%"
@@ -358,7 +388,7 @@ def main(page: ft.Page):
             if not rows:
                 orders_list.controls.append(
                     ft.Container(
-                        content=ft.Text("لا توجد أوردرات مطابقة للبحث", color="grey", size=15),
+                        content=ft.Text("لا توجد أوردرات في هذه الجلسة", color="grey", size=15),
                         alignment=ft.Alignment(0, 0),
                         padding=20
                     )
@@ -381,6 +411,10 @@ def main(page: ft.Page):
                                 ft.Row([
                                     ft.Text("📦 كود: " + str(item.get('order_code', '')), weight="bold", size=15),
                                     ft.Container(
+                                        content=ft.Text(f"📅 {item.get('session_date', '-')}", size=11, color="#475569"),
+                                        bgcolor="white", padding=4, border_radius=4
+                                    ),
+                                    ft.Container(
                                         content=ft.Text(status, size=11, weight="bold"),
                                         bgcolor="white", padding=5, border_radius=4
                                     )
@@ -394,7 +428,7 @@ def main(page: ft.Page):
                                 ft.Row([
                                     ft.Text(f"📦 المنتج: {price:.2f} ج.م", size=12),
                                     ft.Text(f"🚚 الشحن: {fee:.2f} ج.م", size=12),
-                                    ft.Text(f"💵 المطلوب تحصيله: {total:.2f} ج.م", weight="bold", size=13, color="#047857"),
+                                    ft.Text(f"💵 المطلوب: {total:.2f} ج.م", weight="bold", size=13, color="#047857"),
                                 ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
                                 ft.Text("📝 ملاحظات: " + str(item.get('notes', '-')), size=11, italic=True),
 
@@ -434,7 +468,10 @@ def main(page: ft.Page):
             show_msg("يرجى إدخال أرقام صحيحة في خانات المبالغ", color="red")
             return
 
+        s_date = session_date_in.value.strip() or today_str
+
         data = {
+            "session_date": s_date,
             "order_code": code_in.value,
             "customer_name": name_in.value,
             "phone": phone_in.value,
@@ -450,6 +487,7 @@ def main(page: ft.Page):
             supabase.table("orders").insert(data).execute()
             show_msg("تمت إضافة الشحنة بنجاح ✅")
             clear_fields()
+            update_mobile_sessions()
             load_orders()
         except Exception as err:
             show_msg("خطأ أثناء الحفظ (قد يكون الكود مكرراً): " + str(err), color="red")
@@ -467,6 +505,7 @@ def main(page: ft.Page):
             return
 
         data = {
+            "session_date": session_date_in.value.strip(),
             "order_code": code_in.value,
             "customer_name": name_in.value,
             "phone": phone_in.value,
@@ -482,6 +521,7 @@ def main(page: ft.Page):
             supabase.table("orders").update(data).eq("id", selected_order_id["id"]).execute()
             show_msg("تم تحديث بيانات الأوردر بنجاح ✅")
             clear_fields()
+            update_mobile_sessions()
             load_orders()
         except Exception as err:
             show_msg("فشل التعديل: " + str(err), color="red")
@@ -494,6 +534,7 @@ def main(page: ft.Page):
             supabase.table("orders").delete().eq("id", selected_order_id["id"]).execute()
             show_msg("تم حذف الأوردر بنجاح 🗑️")
             clear_fields()
+            update_mobile_sessions()
             load_orders()
         except Exception as err:
             show_msg("فشل الحذف: " + str(err), color="red")
@@ -505,6 +546,7 @@ def main(page: ft.Page):
 
     search_in.on_change = lambda e: load_orders()
     filter_status_dd.on_change = lambda e: load_orders()
+    filter_session_dd.on_change = lambda e: load_orders()
 
     stats_dashboard = ft.Card(
         elevation=2,
@@ -520,7 +562,7 @@ def main(page: ft.Page):
                         padding=8,
                         border_radius=8,
                         content=ft.Column([
-                            ft.Text("🚚 أرباح الشحن", size=11, weight="bold", color="#1e40af"),
+                            ft.Text("🚚 أرباح شحن الجلسة", size=11, weight="bold", color="#1e40af"),
                             stat_shipping
                         ], alignment=ft.MainAxisAlignment.CENTER)
                     ),
@@ -530,7 +572,7 @@ def main(page: ft.Page):
                         padding=8,
                         border_radius=8,
                         content=ft.Column([
-                            ft.Text("📦 ثمن الشحنات", size=11, weight="bold", color="#854d0e"),
+                            ft.Text("📦 بضاعة الجلسة", size=11, weight="bold", color="#854d0e"),
                             stat_items
                         ], alignment=ft.MainAxisAlignment.CENTER)
                     )
@@ -542,7 +584,7 @@ def main(page: ft.Page):
                         padding=8,
                         border_radius=8,
                         content=ft.Column([
-                            ft.Text("💵 الإجمالي الكلي", size=11, weight="bold", color="#065f46"),
+                            ft.Text("💵 مطلوب تحصيله", size=11, weight="bold", color="#065f46"),
                             stat_total
                         ], alignment=ft.MainAxisAlignment.CENTER)
                     ),
@@ -552,7 +594,7 @@ def main(page: ft.Page):
                         padding=8,
                         border_radius=8,
                         content=ft.Column([
-                            ft.Text("🔢 عدد الشحنات", size=11, weight="bold", color="#374151"),
+                            ft.Text("🔢 عدد أوردرات الجلسة", size=11, weight="bold", color="#374151"),
                             stat_count
                         ], alignment=ft.MainAxisAlignment.CENTER)
                     )
@@ -577,7 +619,7 @@ def main(page: ft.Page):
                     ),
                     loading_indicator,
                     ft.Divider(),
-                    code_in, name_in, phone_in, address_in, courier_in,
+                    session_date_in, code_in, name_in, phone_in, address_in, courier_in,
                     ft.Row([price_in, fee_in]),
                     status_dd, notes_in,
                     ft.Row([btn_add, btn_update, btn_delete, btn_clear])
@@ -594,19 +636,20 @@ def main(page: ft.Page):
                 form_tile,
                 ft.Divider(),
                 ft.Row([
-                    ft.Text("🔍 البحث والفلترة", size=16, weight="bold", color="#1e293b"),
-                    ft.ElevatedButton("📋 إرسال كشف واتساب للمندوب", icon=ft.Icons.SHARE, bgcolor="#0284c7", color="white", on_click=share_courier_manifest)
-                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                    filter_session_dd,
+                    ft.ElevatedButton("📋 كشف واتساب", icon=ft.Icons.SHARE, bgcolor="#0284c7", color="white", on_click=share_courier_manifest)
+                ]),
                 ft.Row([search_in, filter_status_dd]),
                 ft.Row([
-                    ft.Text("📋 قائمة الشحنات", size=16, weight="bold"),
-                    ft.IconButton(icon=ft.Icons.REFRESH, on_click=load_orders, tooltip="تحديث")
+                    ft.Text("📋 أوردرات الجلسة المحددة", size=15, weight="bold"),
+                    ft.IconButton(icon=ft.Icons.REFRESH, on_click=lambda e: (update_mobile_sessions(), load_orders()), tooltip="تحديث")
                 ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
                 orders_list
             ])
         )
     )
 
+    update_mobile_sessions()
     load_orders()
 
 
