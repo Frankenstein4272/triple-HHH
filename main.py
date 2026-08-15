@@ -1,13 +1,22 @@
+import os
+import json
 import flet as ft
 from supabase import create_client, Client
+import google.generativeai as genai
+import PIL.Image
 
+# --- إعدادات Supabase السحابية (قراءة آمنة) ---
 SUPABASE_URL = "https://qygefxheemltsaampjbh.supabase.co"
-SUPABASE_KEY = "sb_publishable_-ra_ou-i5SnqG-aItNPJzg_RtkWYYyC"
-
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_publishable_-ra_ou-i5SnqG-aItNPJzg_RtkWYYyC")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# --- إعدادات الذكاء الاصطناعي (Gemini) ---
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+
 def main(page: ft.Page):
-    page.title = "Triple H"
+    page.title = "Triple H - الشحنات"
     page.theme_mode = ft.ThemeMode.LIGHT
     page.rtl = True
     page.scroll = "auto"
@@ -15,14 +24,15 @@ def main(page: ft.Page):
 
     orders_list = ft.Column(spacing=10)
 
+    # حقول إدخال البيانات
     code_in = ft.TextField(label="كود الشحنة", text_align=ft.TextAlign.RIGHT)
-    name_in = ft.TextField(label="اسم العميل", text_align=ft.TextAlign.RIGHT)
+    name_in = ft.TextField(label="اسم العميل (المستلم)", text_align=ft.TextAlign.RIGHT)
     phone_in = ft.TextField(label="رقم الهاتف", keyboard_type=ft.KeyboardType.PHONE, text_align=ft.TextAlign.RIGHT)
-    address_in = ft.TextField(label="العنوان", text_align=ft.TextAlign.RIGHT)
+    address_in = ft.TextField(label="العنوان بالتفصيل", text_align=ft.TextAlign.RIGHT)
     courier_in = ft.TextField(label="اسم المندوب", text_align=ft.TextAlign.RIGHT)
-    price_in = ft.TextField(label="سعر الشحنة", keyboard_type=ft.KeyboardType.NUMBER, text_align=ft.TextAlign.RIGHT, value="0")
-    fee_in = ft.TextField(label="مصاريف الشحن", keyboard_type=ft.KeyboardType.NUMBER, text_align=ft.TextAlign.RIGHT, value="0")
-    notes_in = ft.TextField(label="ملاحظات", text_align=ft.TextAlign.RIGHT)
+    price_in = ft.TextField(label="سعر الشحنة (EGP)", keyboard_type=ft.KeyboardType.NUMBER, text_align=ft.TextAlign.RIGHT, value="0")
+    fee_in = ft.TextField(label="مصاريف الشحن (EGP)", keyboard_type=ft.KeyboardType.NUMBER, text_align=ft.TextAlign.RIGHT, value="0")
+    notes_in = ft.TextField(label="ملاحظات إضافية", text_align=ft.TextAlign.RIGHT)
     
     status_dd = ft.Dropdown(
         label="الحالة",
@@ -35,11 +45,82 @@ def main(page: ft.Page):
         ]
     )
 
+    loading_indicator = ft.ProgressBar(visible=False, color="#3b82f6")
+
     def show_msg(text, color="green"):
         snack = ft.SnackBar(ft.Text(text), bgcolor=color)
         page.overlay.append(snack)
         snack.open = True
         page.update()
+
+    # --- معالجة صورة الورقة بالذكاء الاصطناعي ---
+    def process_image_with_ai(file_path):
+        if not GEMINI_API_KEY:
+            show_msg("مفتاح Gemini غير مفعل!", color="red")
+            return
+
+        loading_indicator.visible = True
+        page.update()
+        try:
+            img = PIL.Image.open(file_path)
+            model = genai.GenerativeModel("gemini-1.5-flash")
+
+            prompt = """
+            أنت مساعد ذكي متخصص في استخراج بيانات شحنات التوصيل من الصور (سواء كانت مكتوبة بخط اليد أو مطبوعة).
+            قم بتحليل الصورة واستخرج البيانات بدقة بصيغة JSON فقط:
+            {
+                "order_code": "كود الشحنة أو رقم البوليصة إن وجد",
+                "customer_name": "اسم العميل المستلم",
+                "phone": "رقم الهاتف",
+                "address": "العنوان بالتفصيل المحافظة والمنطقة والشارع",
+                "item_price": 0,
+                "shipping_fee": 0,
+                "notes": "أي ملاحظات إضافية على الطرد"
+            }
+            إذا لم تجد قيمة لحقل معين اجعل قيمته نص فارغ "" أو 0 للمبالغ. لا تضف أي شرح أو نصوص خارج الـ JSON.
+            """
+
+            response = model.generate_content([prompt, img])
+            text_resp = response.text.strip()
+
+            if text_resp.startswith("```json"):
+                text_resp = text_resp[7:]
+            if text_resp.startswith("```"):
+                text_resp = text_resp[3:]
+            if text_resp.endswith("```"):
+                text_resp = text_resp[:-3]
+            
+            data = json.loads(text_resp.strip())
+
+            if data.get("order_code"):
+                code_in.value = str(data.get("order_code"))
+            if data.get("customer_name"):
+                name_in.value = str(data.get("customer_name"))
+            if data.get("phone"):
+                phone_in.value = str(data.get("phone"))
+            if data.get("address"):
+                address_in.value = str(data.get("address"))
+            if data.get("item_price"):
+                price_in.value = str(data.get("item_price"))
+            if data.get("shipping_fee"):
+                fee_in.value = str(data.get("shipping_fee"))
+            if data.get("notes"):
+                notes_in.value = str(data.get("notes"))
+
+            show_msg("تم استخراج بيانات الشحنة من الورقة بنجاح! 🎯")
+        except Exception as ex:
+            show_msg("خطأ في قراءة الصورة: " + str(ex), color="red")
+        finally:
+            loading_indicator.visible = False
+            page.update()
+
+    def on_file_picked(e: ft.FilePickerResultEvent):
+        if e.files and len(e.files) > 0:
+            file_path = e.files[0].path
+            process_image_with_ai(file_path)
+
+    file_picker = ft.FilePicker(on_result=on_file_picked)
+    page.overlay.append(file_picker)
 
     def load_orders(e=None):
         orders_list.controls.clear()
@@ -125,14 +206,28 @@ def main(page: ft.Page):
             content=ft.Column([
                 ft.ExpansionTile(
                     title=ft.Text("➕ إضافة شحنة جديدة", weight="bold", color="#0f766e"),
+                    initially_expanded=True,
                     controls=[
                         ft.Container(
                             padding=10,
                             content=ft.Column([
+                                ft.ElevatedButton(
+                                    "📷 تصوير / رفع صورة البوليصة (AI Scan)",
+                                    icon=ft.Icons.CAMERA_ALT,
+                                    bgcolor="#3b82f6",
+                                    color="white",
+                                    height=45,
+                                    on_click=lambda _: file_picker.pick_files(
+                                        allow_multiple=False,
+                                        allowed_extensions=["png", "jpg", "jpeg"]
+                                    )
+                                ),
+                                loading_indicator,
+                                ft.Divider(),
                                 code_in, name_in, phone_in, address_in, courier_in,
                                 ft.Row([price_in, fee_in]),
                                 status_dd, notes_in,
-                                ft.ElevatedButton("حفظ الأوردر", icon=ft.Icons.SAVE, on_click=add_order_click, bgcolor="#10b981", color="white")
+                                ft.ElevatedButton("حفظ الأوردر", icon=ft.Icons.SAVE, on_click=add_order_click, bgcolor="#10b981", color="white", height=45)
                             ])
                         )
                     ]
