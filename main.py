@@ -19,7 +19,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", DEFAULT_GEMINI_KEY)
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
-async def main(page: ft.Page):
+def main(page: ft.Page):
     page.title = "Triple H - الشحنات"
     page.theme_mode = ft.ThemeMode.LIGHT
     page.rtl = True
@@ -51,20 +51,20 @@ async def main(page: ft.Page):
 
     loading_indicator = ft.ProgressBar(visible=False, color="#3b82f6")
 
-    async def show_msg(text, color="green"):
+    def show_msg(text, color="green"):
         snack = ft.SnackBar(ft.Text(text), bgcolor=color)
         page.overlay.append(snack)
         snack.open = True
-        await page.update_async()
+        page.update()
 
     # --- معالجة واستخراج بيانات الشحنة من الصورة بالذكاء الاصطناعي ---
-    async def process_image_with_ai(file_path=None, file_bytes=None):
+    def process_image_with_ai(file_path=None, file_bytes=None):
         if not GEMINI_API_KEY:
-            await show_msg("مفتاح Gemini غير مفعل!", color="red")
+            show_msg("مفتاح Gemini غير مفعل!", color="red")
             return
 
         loading_indicator.visible = True
-        await page.update_async()
+        page.update()
 
         try:
             if file_bytes:
@@ -72,7 +72,7 @@ async def main(page: ft.Page):
             elif file_path:
                 img = PIL.Image.open(file_path)
             else:
-                await show_msg("لم يتم العثور على ملف الصورة", color="red")
+                show_msg("لم يتم العثور على ملف الصورة", color="red")
                 return
 
             model = genai.GenerativeModel("gemini-1.5-flash")
@@ -119,32 +119,32 @@ async def main(page: ft.Page):
             if data.get("notes"):
                 notes_in.value = str(data.get("notes"))
 
-            await show_msg("تم استخراج بيانات الشحنة من الورقة بنجاح! 🎯")
+            show_msg("تم استخراج بيانات الشحنة من الورقة بنجاح! 🎯")
         except Exception as ex:
-            await show_msg("خطأ في قراءة الصورة: " + str(ex), color="red")
+            show_msg("خطأ في قراءة الصورة: " + str(ex), color="red")
         finally:
             loading_indicator.visible = False
-            await page.update_async()
+            page.update()
 
     # --- اختيار وتصوير الملف ---
-    async def pick_file_click(e):
+    def pick_file_click(e):
         try:
             picker = ft.FilePicker()
-            files = await picker.pick_files(
+            files = picker.pick_files(
                 allow_multiple=False,
                 allowed_extensions=["png", "jpg", "jpeg"]
             )
             if files and len(files) > 0:
                 selected_file = files[0]
-                await process_image_with_ai(
+                process_image_with_ai(
                     file_path=getattr(selected_file, 'path', None),
                     file_bytes=getattr(selected_file, 'bytes', None)
                 )
         except Exception as ex:
-            await show_msg("خطأ في فتح مستعرض الصور: " + str(ex), color="red")
+            show_msg("خطأ في فتح مستعرض الصور: " + str(ex), color="red")
 
     # --- تحميل قائمة الشحنات من Supabase ---
-    async def load_orders(e=None):
+    def load_orders(e=None):
         orders_list.controls.clear()
         try:
             res = supabase.table("orders").select("*").order("id", desc=True).execute()
@@ -171,7 +171,7 @@ async def main(page: ft.Page):
                                     ft.Text("📦 كود: " + str(item.get('order_code', '')), weight="bold", size=15),
                                     ft.Container(
                                         content=ft.Text(status, size=11, weight="bold"),
-                                        bgcolor="white", padding=ft.padding.symmetric(horizontal=6, vertical=3), border_radius=4
+                                        bgcolor="white", padding=5, border_radius=4
                                     )
                                 ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
                                 ft.Text("👤 العميل: " + str(item.get('customer_name', ''))),
@@ -185,21 +185,21 @@ async def main(page: ft.Page):
                         )
                     )
                     orders_list.controls.append(card)
-            await page.update_async()
+            page.update()
         except Exception as err:
-            await show_msg("خطأ في جلب البيانات: " + str(err), color="red")
+            show_msg("خطأ في جلب البيانات: " + str(err), color="red")
 
     # --- إضافة وحفظ شحنة جديدة ---
-    async def add_order_click(e):
+    def add_order_click(e):
         if not code_in.value or not name_in.value or not phone_in.value:
-            await show_msg("يرجى ملء الكود والاسم والهاتف!", color="orange")
+            show_msg("يرجى ملء الكود والاسم والهاتف!", color="orange")
             return
         
         try:
             p_val = float(price_in.value or 0)
             f_val = float(fee_in.value or 0)
         except ValueError:
-            await show_msg("أدخل أرقام صحيحة في الأسعار", color="red")
+            show_msg("أدخل أرقام صحيحة في الأسعار", color="red")
             return
 
         data = {
@@ -216,12 +216,12 @@ async def main(page: ft.Page):
         
         try:
             supabase.table("orders").insert(data).execute()
-            await show_msg("تمت إضافة الشحنة بنجاح ✅")
+            show_msg("تمت إضافة الشحنة بنجاح ✅")
             code_in.value = name_in.value = phone_in.value = address_in.value = courier_in.value = notes_in.value = ""
             price_in.value = fee_in.value = "0"
-            await load_orders()
+            load_orders()
         except Exception as err:
-            await show_msg("خطأ أثناء الحفظ: " + str(err), color="red")
+            show_msg("خطأ أثناء الحفظ: " + str(err), color="red")
 
     # واجهة التطبيق
     page.add(
@@ -262,7 +262,7 @@ async def main(page: ft.Page):
         )
     )
 
-    await load_orders()
+    load_orders()
 
 if __name__ == "__main__":
     ft.app(target=main)
