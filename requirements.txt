@@ -1,2 +1,4 @@
 flet
 supabase
+google-generativeai
+pillow
