@@ -253,7 +253,7 @@ def main(page: ft.Page):
                 orders_list.controls.append(
                     ft.Container(
                         content=ft.Text("لا توجد أوردرات مطابقة للبحث", color="grey", size=15),
-                        alignment=ft.alignment.center,
+                        alignment=ft.Alignment(0, 0),
                         padding=20
                     )
                 )
@@ -393,7 +393,7 @@ def main(page: ft.Page):
     search_in.on_change = lambda e: load_orders()
     filter_status_dd.on_change = lambda e: load_orders()
 
-    # قسم الإحصائيات (Card متجاوب وخالٍ من أخطاء الـ border)
+    # قسم الإحصائيات
     stats_dashboard = ft.Card(
         elevation=2,
         content=ft.Container(
