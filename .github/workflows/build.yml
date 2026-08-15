@@ -31,9 +31,12 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install "flet[all]" flet-cli supabase
+          pip install "flet[all]" flet-cli supabase google-generativeai pillow
 
       - name: Build APK
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
           flutter config --no-analytics
           flet build apk --verbose --yes
