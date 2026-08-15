@@ -1,9 +1,11 @@
 import os
 import io
 import json
+import base64
+import urllib.request
+import urllib.parse
 import flet as ft
 from supabase import create_client, Client
-import google.generativeai as genai
 import PIL.Image
 
 # --- إعدادات Supabase السحابية ---
@@ -11,13 +13,11 @@ SUPABASE_URL = "https://qygefxheemltsaampjbh.supabase.co"
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_publishable_-ra_ou-i5SnqG-aItNPJzg_RtkWYYyC")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# --- إعدادات الذكاء الاصطناعي (Gemini) ---
-_k_parts = ["AQ.Ab8RN6KJB4uOPzF", "ne62AK-bM0rgoz_AUj", "SWpgMB02fEF_EMNJg"]
+# --- إعدادات الذكاء الاصطناعي (Gemini) بمفتاحك ---
+_k_parts = ["AQ.Ab8RN6KIkzTRIuUh", "7FC4cCYVxsS419zLlFu", "RNh6oxaLO5KThzQ"]
 DEFAULT_GEMINI_KEY = "".join(_k_parts)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", DEFAULT_GEMINI_KEY)
 
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
 
 def main(page: ft.Page):
     page.title = "Triple H - نظام الشحنات المتكامل"
@@ -26,16 +26,14 @@ def main(page: ft.Page):
     page.scroll = "auto"
     page.padding = 10
 
-    # متغير تتبع الأوردر المحدد للتعديل
     selected_order_id = {"id": None}
+    current_orders_data = {"rows": []}
 
-    # عناصر عرض الإحصائيات
     stat_shipping = ft.Text("0.00 EGP", size=14, weight="bold", color="#1d4ed8")
     stat_items = ft.Text("0.00 EGP", size=14, weight="bold", color="#b45309")
     stat_total = ft.Text("0.00 EGP", size=15, weight="bold", color="#047857")
     stat_count = ft.Text("0", size=15, weight="bold", color="#1e293b")
 
-    # حقول إدخال البيانات
     code_in = ft.TextField(label="كود الشحنة (تلقائي/يدوي)", text_align=ft.TextAlign.RIGHT)
     name_in = ft.TextField(label="اسم العميل (المستلم)", text_align=ft.TextAlign.RIGHT)
     phone_in = ft.TextField(label="رقم الهاتف", keyboard_type=ft.KeyboardType.PHONE, text_align=ft.TextAlign.RIGHT)
@@ -44,7 +42,7 @@ def main(page: ft.Page):
     price_in = ft.TextField(label="سعر الشحنة / المنتج (EGP)", keyboard_type=ft.KeyboardType.NUMBER, text_align=ft.TextAlign.RIGHT, value="0")
     fee_in = ft.TextField(label="مصاريف الشحن (EGP)", keyboard_type=ft.KeyboardType.NUMBER, text_align=ft.TextAlign.RIGHT, value="0")
     notes_in = ft.TextField(label="ملاحظات إضافية", text_align=ft.TextAlign.RIGHT)
-    
+
     status_dd = ft.Dropdown(
         label="حالة الشحنة",
         value="قيد الانتظار",
@@ -56,12 +54,11 @@ def main(page: ft.Page):
         ]
     )
 
-    # حقول البحث والفلترة
     search_in = ft.TextField(label="🔍 بحث (كود، اسم، هاتف، مندوب)", text_align=ft.TextAlign.RIGHT, expand=True)
     filter_status_dd = ft.Dropdown(
         label="فلترة بالحالة",
         value="كل الحالات",
-        width=160,
+        width=150,
         options=[
             ft.dropdown.Option("كل الحالات"),
             ft.dropdown.Option("قيد الانتظار"),
@@ -74,7 +71,6 @@ def main(page: ft.Page):
     loading_indicator = ft.ProgressBar(visible=False, color="#3b82f6")
     orders_list = ft.Column(spacing=10)
 
-    # أزرار التحكم
     btn_add = ft.ElevatedButton("➕ إضافة أوردر", icon=ft.Icons.ADD, bgcolor="#10b981", color="white", height=45, expand=True)
     btn_update = ft.ElevatedButton("✏️ حفظ التعديل", icon=ft.Icons.CHECK, bgcolor="#3b82f6", color="white", height=45, visible=False, expand=True)
     btn_delete = ft.ElevatedButton("🗑️ حذف", icon=ft.Icons.DELETE, bgcolor="#ef4444", color="white", height=45, visible=False)
@@ -124,12 +120,48 @@ def main(page: ft.Page):
         btn_add.visible = False
         btn_update.visible = True
         btn_delete.visible = True
-        
+
         form_tile.expanded = True
         page.update()
         show_msg(f"تم اختيار الأوردر #{code_in.value} للتعديل", color="#2563eb")
 
-    # --- معالجة واستخراج بيانات الشحنة من الصورة بالذكاء الاصطناعي ---
+    def open_whatsapp_customer(item):
+        phone = str(item.get("phone") or "").strip().replace(" ", "").replace("-", "")
+        if not phone:
+            show_msg("لا يوجد رقم هاتف مسجل!", color="red")
+            return
+
+        if phone.startswith("01"):
+            phone = "2" + phone
+        elif not phone.startswith("+") and not phone.startswith("20"):
+            phone = "20" + phone
+
+        name = item.get("customer_name") or "العميل العزيز"
+        code = item.get("order_code") or ""
+        courier = item.get("courier") or "مندوبنا"
+        msg = f"مرحباً {name}، شحنتك رقم #{code} في الطريق إليك مع المندوب: {courier}. برجاء التواجد للاستلام."
+        page.launch_url(f"https://wa.me/{phone}?text={urllib.parse.quote(msg)}")
+
+    def share_courier_manifest(e=None):
+        if not current_orders_data["rows"]:
+            show_msg("لا توجد أوردرات معروضة لمشاركتها!", color="orange")
+            return
+
+        lines = ["📦 *كشف تسليم الشحنات - Triple H*", "-------------------------"]
+        total_collect = 0.0
+        for idx, r in enumerate(current_orders_data["rows"], 1):
+            tot = float(r.get('item_price') or 0) + float(r.get('shipping_fee') or 0)
+            total_collect += tot
+            lines.append(f"{idx}) #{r.get('order_code')} - {r.get('customer_name')}")
+            lines.append(f"📞 {r.get('phone')} | 📍 {r.get('address')}")
+            lines.append(f"💵 المطلوب تحصيله: {tot:.2f} EGP")
+            lines.append("-------------------------")
+
+        lines.append(f"💰 *إجمالي التحصيل المطلوب: {total_collect:,.2f} EGP*")
+        full_text = "\n".join(lines)
+        page.launch_url(f"https://wa.me/?text={urllib.parse.quote(full_text)}")
+
+    # --- معالجة وقراءة الصورة عبر الكشف التلقائي للنماذج النشطة ---
     def process_image_with_ai(file_path=None, file_bytes=None):
         if not GEMINI_API_KEY:
             show_msg("مفتاح Gemini غير مفعل!", color="red")
@@ -140,41 +172,115 @@ def main(page: ft.Page):
 
         try:
             if file_bytes:
-                img = PIL.Image.open(io.BytesIO(file_bytes))
+                img = PIL.Image.open(io.BytesIO(file_bytes)).convert("RGB")
             elif file_path:
-                img = PIL.Image.open(file_path)
+                img = PIL.Image.open(file_path).convert("RGB")
             else:
                 show_msg("لم يتم العثور على ملف الصورة", color="red")
                 return
 
-            model = genai.GenerativeModel("gemini-1.5-flash")
+            buffered = io.BytesIO()
+            img.save(buffered, format="JPEG", quality=85)
+            img_b64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-            prompt = """
-            أنت مساعد ذكي متخصص في استخراج بيانات شحنات التوصيل من الصور (سواء كانت مكتوبة بخط اليد أو مطبوعة).
-            قم بتحليل الصورة واستخرج البيانات بدقة بصيغة JSON فقط:
+            prompt_text = """
+            أنت مساعد ذكي لاستخراج بيانات شحنات التوصيل وبوالص الشحن (سواء كانت مكتوبة بخط اليد أو مطبوعة).
+            استخرج البيانات بصيغة JSON فقط بدون أي نصوص إضافية:
             {
                 "order_code": "كود الشحنة أو رقم البوليصة إن وجد",
                 "customer_name": "اسم العميل المستلم",
                 "phone": "رقم الهاتف",
-                "address": "العنوان بالتفصيل المحافظة والمنطقة والشارع",
+                "address": "العنوان بالتفصيل",
                 "item_price": 0,
                 "shipping_fee": 0,
                 "notes": "أي ملاحظات إضافية على الطرد"
             }
-            إذا لم تجد قيمة لحقل معين اجعل قيمته نص فارغ "" أو 0 للمبالغ. لا تضف أي شرح أو نصوص خارج الـ JSON.
+            إذا لم تجد قيمة لحقل معين اجعل قيمته نص فارغ "" أو 0 للمبالغ.
             """
 
-            response = model.generate_content([prompt, img])
-            text_resp = response.text.strip()
+            payload = {
+                "contents": [
+                    {
+                        "parts": [
+                            {"text": prompt_text},
+                            {
+                                "inline_data": {
+                                    "mime_type": "image/jpeg",
+                                    "data": img_b64
+                                }
+                            }
+                        ]
+                    }
+                ]
+            }
 
-            if text_resp.startswith("```json"):
-                text_resp = text_resp[7:]
-            if text_resp.startswith("```"):
-                text_resp = text_resp[3:]
-            if text_resp.endswith("```"):
-                text_resp = text_resp[:-3]
+            target_models = []
+            try:
+                list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
+                req_list = urllib.request.Request(list_url, headers={"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY})
+                with urllib.request.urlopen(req_list, timeout=10) as resp:
+                    if resp.status == 200:
+                        data_models = json.loads(resp.read().decode("utf-8"))
+                        for m in data_models.get("models", []):
+                            if "generateContent" in m.get("supportedGenerationMethods", []):
+                                target_models.append(m["name"])
+            except Exception:
+                pass
+
+            if not target_models:
+                target_models = [
+                    "models/gemini-2.0-flash",
+                    "models/gemini-1.5-flash",
+                    "models/gemini-1.5-flash-8b",
+                    "models/gemini-1.5-pro",
+                    "models/gemini-pro"
+                ]
+
+            response_json = None
+            last_err_msg = ""
+
+            for full_model_name in target_models:
+                clean_name = full_model_name.replace("models/", "")
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{clean_name}:generateContent?key={GEMINI_API_KEY}"
+                
+                req = urllib.request.Request(
+                    url,
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY}
+                )
+
+                try:
+                    with urllib.request.urlopen(req, timeout=30) as resp:
+                        if resp.status == 200:
+                            response_json = json.loads(resp.read().decode("utf-8"))
+                            break
+                except Exception as err:
+                    last_err_msg = str(err)
+                    continue
+
+            if not response_json:
+                raise Exception(f"فشل الاتصال: {last_err_msg}")
+
+            # استخراج النص بطريقة آمنة
+            candidates = response_json.get("candidates", [])
+            if not candidates:
+                raise Exception("لم يتم العثور على نتيجة من الذكاء الاصطناعي")
             
-            data = json.loads(text_resp.strip())
+            first_candidate = candidates[0]
+            parts = first_candidate.get("content", {}).get("parts", [])
+            if not parts:
+                raise Exception("رد الذكاء الاصطناعي فارغ")
+            
+            raw_text = parts[0].get("text", "").strip()
+
+            if raw_text.startswith("```json"):
+                raw_text = raw_text[7:]
+            if raw_text.startswith("```"):
+                raw_text = raw_text[3:]
+            if raw_text.endswith("```"):
+                raw_text = raw_text[:-3]
+
+            data = json.loads(raw_text.strip())
 
             if data.get("order_code"):
                 code_in.value = str(data.get("order_code"))
@@ -192,29 +298,29 @@ def main(page: ft.Page):
                 notes_in.value = str(data.get("notes"))
 
             show_msg("تم استخراج بيانات الشحنة من الورقة بنجاح! 🎯")
+
         except Exception as ex:
             show_msg("خطأ في قراءة الصورة: " + str(ex), color="red")
         finally:
             loading_indicator.visible = False
             page.update()
 
-    def pick_file_click(e):
+    async def pick_file_click(e):
         try:
-            picker = ft.FilePicker()
-            files = picker.pick_files(
+            files = await ft.FilePicker().pick_files(
                 allow_multiple=False,
                 allowed_extensions=["png", "jpg", "jpeg"]
             )
-            if files and len(files) > 0:
-                selected_file = files[0]
-                process_image_with_ai(
-                    file_path=getattr(selected_file, 'path', None),
-                    file_bytes=getattr(selected_file, 'bytes', None)
-                )
+            if files:
+                for f in files:
+                    process_image_with_ai(
+                        file_path=getattr(f, 'path', None),
+                        file_bytes=getattr(f, 'bytes', None)
+                    )
+                    break
         except Exception as ex:
-            show_msg("خطأ في فتح مستعرض الصور: " + str(ex), color="red")
+            show_msg("خطأ في مستعرض الصور: " + str(ex), color="red")
 
-    # --- جلب البيانات مع الفلترة والبحث وحساب الإحصائيات ---
     def load_orders(e=None):
         orders_list.controls.clear()
         search_txt = search_in.value.strip() if search_in.value else ""
@@ -238,8 +344,8 @@ def main(page: ft.Page):
 
             res = query.order("id", desc=True).execute()
             rows = res.data or []
+            current_orders_data["rows"] = rows
 
-            # حساب الإحصائيات
             total_items = sum(float(r.get("item_price") or 0) for r in rows)
             total_shipping = sum(float(r.get("shipping_fee") or 0) for r in rows)
             grand_total = total_items + total_shipping
@@ -279,7 +385,7 @@ def main(page: ft.Page):
                                         bgcolor="white", padding=5, border_radius=4
                                     )
                                 ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                                
+
                                 ft.Text("👤 العميل: " + str(item.get('customer_name', '')), weight="w600"),
                                 ft.Text("📞 الهاتف: " + str(item.get('phone', ''))),
                                 ft.Text("📍 العنوان: " + str(item.get('address', ''))),
@@ -288,13 +394,23 @@ def main(page: ft.Page):
                                 ft.Row([
                                     ft.Text(f"📦 المنتج: {price:.2f} ج.م", size=12),
                                     ft.Text(f"🚚 الشحن: {fee:.2f} ج.م", size=12),
-                                    ft.Text(f"💵 الإجمالي: {total:.2f} ج.م", weight="bold", size=13, color="#047857"),
+                                    ft.Text(f"💵 المطلوب تحصيله: {total:.2f} ج.م", weight="bold", size=13, color="#047857"),
                                 ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
                                 ft.Text("📝 ملاحظات: " + str(item.get('notes', '-')), size=11, italic=True),
+
                                 ft.Row([
+                                    ft.ElevatedButton(
+                                        "💬 واتساب",
+                                        icon=ft.Icons.CHAT,
+                                        bgcolor="#25d366",
+                                        color="white",
+                                        height=36,
+                                        on_click=lambda e, itm=item: open_whatsapp_customer(itm)
+                                    ),
                                     ft.OutlinedButton(
-                                        "✏️ تعديل الأوردر",
+                                        "✏️ تعديل",
                                         icon=ft.Icons.EDIT,
+                                        height=36,
                                         on_click=lambda e, itm=item: select_order_for_edit(itm),
                                     )
                                 ], alignment=ft.MainAxisAlignment.END)
@@ -306,12 +422,11 @@ def main(page: ft.Page):
         except Exception as err:
             show_msg("خطأ في جلب البيانات: " + str(err), color="red")
 
-    # --- إضافة أوردر جديد ---
     def add_order_click(e):
         if not code_in.value or not name_in.value or not phone_in.value:
             show_msg("يرجى ملء الكود والاسم ورقم الهاتف على الأقل!", color="orange")
             return
-        
+
         try:
             p_val = float(price_in.value or 0)
             f_val = float(fee_in.value or 0)
@@ -330,7 +445,7 @@ def main(page: ft.Page):
             "status": status_dd.value,
             "notes": notes_in.value
         }
-        
+
         try:
             supabase.table("orders").insert(data).execute()
             show_msg("تمت إضافة الشحنة بنجاح ✅")
@@ -339,7 +454,6 @@ def main(page: ft.Page):
         except Exception as err:
             show_msg("خطأ أثناء الحفظ (قد يكون الكود مكرراً): " + str(err), color="red")
 
-    # --- تحديث أوردر محدد ---
     def update_order_click(e):
         if not selected_order_id["id"]:
             show_msg("لم يتم تحديد أوردر للتعديل!", color="orange")
@@ -372,7 +486,6 @@ def main(page: ft.Page):
         except Exception as err:
             show_msg("فشل التعديل: " + str(err), color="red")
 
-    # --- حذف أوردر محدد ---
     def delete_order_click(e):
         if not selected_order_id["id"]:
             return
@@ -393,7 +506,6 @@ def main(page: ft.Page):
     search_in.on_change = lambda e: load_orders()
     filter_status_dd.on_change = lambda e: load_orders()
 
-    # قسم الإحصائيات
     stats_dashboard = ft.Card(
         elevation=2,
         content=ft.Container(
@@ -449,7 +561,6 @@ def main(page: ft.Page):
         )
     )
 
-    # نموذج الإدخال والتعديل
     form_tile = ft.ExpansionTile(
         title=form_title,
         controls=[
@@ -475,7 +586,6 @@ def main(page: ft.Page):
         ]
     )
 
-    # بناء واجهة التطبيق
     page.add(
         ft.AppBar(title=ft.Text("📦 Triple H - إدارة الشحنات", color="white", weight="bold"), bgcolor="#1e293b", center_title=True),
         ft.Container(
@@ -483,7 +593,10 @@ def main(page: ft.Page):
                 stats_dashboard,
                 form_tile,
                 ft.Divider(),
-                ft.Text("🔍 البحث والفلترة", size=16, weight="bold", color="#1e293b"),
+                ft.Row([
+                    ft.Text("🔍 البحث والفلترة", size=16, weight="bold", color="#1e293b"),
+                    ft.ElevatedButton("📋 إرسال كشف واتساب للمندوب", icon=ft.Icons.SHARE, bgcolor="#0284c7", color="white", on_click=share_courier_manifest)
+                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
                 ft.Row([search_in, filter_status_dd]),
                 ft.Row([
                     ft.Text("📋 قائمة الشحنات", size=16, weight="bold"),
@@ -495,6 +608,7 @@ def main(page: ft.Page):
     )
 
     load_orders()
+
 
 if __name__ == "__main__":
     ft.app(target=main)
