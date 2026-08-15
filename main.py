@@ -1,11 +1,12 @@
 import os
+import io
 import json
 import flet as ft
 from supabase import create_client, Client
 import google.generativeai as genai
 import PIL.Image
 
-# --- إعدادات Supabase السحابية (قراءة آمنة) ---
+# --- إعدادات Supabase السحابية ---
 SUPABASE_URL = "https://qygefxheemltsaampjbh.supabase.co"
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_publishable_-ra_ou-i5SnqG-aItNPJzg_RtkWYYyC")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -15,7 +16,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
-def main(page: ft.Page):
+async def main(page: ft.Page):
     page.title = "Triple H - الشحنات"
     page.theme_mode = ft.ThemeMode.LIGHT
     page.rtl = True
@@ -47,22 +48,30 @@ def main(page: ft.Page):
 
     loading_indicator = ft.ProgressBar(visible=False, color="#3b82f6")
 
-    def show_msg(text, color="green"):
+    async def show_msg(text, color="green"):
         snack = ft.SnackBar(ft.Text(text), bgcolor=color)
         page.overlay.append(snack)
         snack.open = True
-        page.update()
+        await page.update_async()
 
-    # --- معالجة صورة الورقة بالذكاء الاصطناعي ---
-    def process_image_with_ai(file_path):
+    # --- استخراج بيانات الشحنة بالذكاء الاصطناعي ---
+    async def process_image_with_ai(file_path=None, file_bytes=None):
         if not GEMINI_API_KEY:
-            show_msg("مفتاح Gemini غير مفعل!", color="red")
+            await show_msg("مفتاح Gemini غير مفعل!", color="red")
             return
 
         loading_indicator.visible = True
-        page.update()
+        await page.update_async()
+
         try:
-            img = PIL.Image.open(file_path)
+            if file_bytes:
+                img = PIL.Image.open(io.BytesIO(file_bytes))
+            elif file_path:
+                img = PIL.Image.open(file_path)
+            else:
+                await show_msg("لم يتم العثور على ملف الصورة", color="red")
+                return
+
             model = genai.GenerativeModel("gemini-1.5-flash")
 
             prompt = """
@@ -107,22 +116,31 @@ def main(page: ft.Page):
             if data.get("notes"):
                 notes_in.value = str(data.get("notes"))
 
-            show_msg("تم استخراج بيانات الشحنة من الورقة بنجاح! 🎯")
+            await show_msg("تم استخراج بيانات الشحنة من الورقة بنجاح! 🎯")
         except Exception as ex:
-            show_msg("خطأ في قراءة الصورة: " + str(ex), color="red")
+            await show_msg("خطأ في قراءة الصورة: " + str(ex), color="red")
         finally:
             loading_indicator.visible = False
-            page.update()
+            await page.update_async()
 
-    def on_file_picked(e: ft.FilePickerResultEvent):
-        if e.files and len(e.files) > 0:
-            file_path = e.files[0].path
-            process_image_with_ai(file_path)
+    # --- دالة اختيار وتصوير الملف الحديثة المتوافقة ---
+    async def pick_file_click(e):
+        try:
+            picker = ft.FilePicker()
+            files = await picker.pick_files(
+                allow_multiple=False,
+                allowed_extensions=["png", "jpg", "jpeg"]
+            )
+            if files and len(files) > 0:
+                selected_file = files 0 
+                await process_image_with_ai(
+                    file_path=getattr(selected_file, 'path', None),
+                    file_bytes=getattr(selected_file, 'bytes', None)
+                )
+        except Exception as ex:
+            await show_msg("خطأ في فتح مستعرض الصور: " + str(ex), color="red")
 
-    file_picker = ft.FilePicker(on_result=on_file_picked)
-    page.overlay.append(file_picker)
-
-    def load_orders(e=None):
+    async def load_orders(e=None):
         orders_list.controls.clear()
         try:
             res = supabase.table("orders").select("*").order("id", desc=True).execute()
@@ -163,20 +181,20 @@ def main(page: ft.Page):
                         )
                     )
                     orders_list.controls.append(card)
-            page.update()
+            await page.update_async()
         except Exception as err:
-            show_msg("خطأ في جلب البيانات: " + str(err), color="red")
+            await show_msg("خطأ في جلب البيانات: " + str(err), color="red")
 
-    def add_order_click(e):
+    async def add_order_click(e):
         if not code_in.value or not name_in.value or not phone_in.value:
-            show_msg("يرجى ملء الكود والاسم والهاتف!", color="orange")
+            await show_msg("يرجى ملء الكود والاسم والهاتف!", color="orange")
             return
         
         try:
             p_val = float(price_in.value or 0)
             f_val = float(fee_in.value or 0)
         except ValueError:
-            show_msg("أدخل أرقام صحيحة في الأسعار", color="red")
+            await show_msg("أدخل أرقام صحيحة في الأسعار", color="red")
             return
 
         data = {
@@ -193,12 +211,12 @@ def main(page: ft.Page):
         
         try:
             supabase.table("orders").insert(data).execute()
-            show_msg("تمت إضافة الشحنة بنجاح ✅")
+            await show_msg("تمت إضافة الشحنة بنجاح ✅")
             code_in.value = name_in.value = phone_in.value = address_in.value = courier_in.value = notes_in.value = ""
             price_in.value = fee_in.value = "0"
-            load_orders()
+            await load_orders()
         except Exception as err:
-            show_msg("خطأ أثناء الحفظ: " + str(err), color="red")
+            await show_msg("خطأ أثناء الحفظ: " + str(err), color="red")
 
     page.add(
         ft.AppBar(title=ft.Text("Triple H - الشحنات", color="white"), bgcolor="#1e293b", center_title=True),
@@ -217,10 +235,7 @@ def main(page: ft.Page):
                                     bgcolor="#3b82f6",
                                     color="white",
                                     height=45,
-                                    on_click=lambda _: file_picker.pick_files(
-                                        allow_multiple=False,
-                                        allowed_extensions=["png", "jpg", "jpeg"]
-                                    )
+                                    on_click=pick_file_click
                                 ),
                                 loading_indicator,
                                 ft.Divider(),
@@ -242,7 +257,7 @@ def main(page: ft.Page):
         )
     )
 
-    load_orders()
+    await load_orders()
 
 if __name__ == "__main__":
     ft.app(target=main)
