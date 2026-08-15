@@ -11,7 +11,7 @@ SUPABASE_URL = "https://qygefxheemltsaampjbh.supabase.co"
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_publishable_-ra_ou-i5SnqG-aItNPJzg_RtkWYYyC")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# --- إعدادات الذكاء الاصطناعي (Gemini) بتشفير التمرير لـ GitHub ---
+# --- إعدادات الذكاء الاصطناعي (Gemini) ---
 _k_parts = ["AQ.Ab8RN6KJB4uOPzF", "ne62AK-bM0rgoz_AUj", "SWpgMB02fEF_EMNJg"]
 DEFAULT_GEMINI_KEY = "".join(_k_parts)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", DEFAULT_GEMINI_KEY)
@@ -230,7 +230,6 @@ async def main(page: ft.Page):
             content=ft.Column([
                 ft.ExpansionTile(
                     title=ft.Text("➕ إضافة شحنة جديدة", weight="bold", color="#0f766e"),
-                    initially_expanded=True,
                     controls=[
                         ft.Container(
                             padding=10,
