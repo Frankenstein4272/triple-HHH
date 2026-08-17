@@ -31,12 +31,12 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install "flet[all]" flet-cli supabase google-generativeai pillow
+          pip install "flet[all]" flet-cli supabase google-genai pillow reportlab arabic-reshaper python-bidi pandas openpyxl
 
       - name: Build APK
         run: |
           flutter config --no-analytics
-          flet build apk --verbose --yes
+          flet build apk --product-name "Triple H" --project-name "triple_h" --icon icon.png --android-permissions android.permission.INTERNET=true --android-permissions android.permission.CAMERA=true --android-permissions android.permission.READ_MEDIA_IMAGES=true --verbose --yes
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
