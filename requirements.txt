@@ -1,4 +1,9 @@
 flet
 supabase
-google-generativeai
+google-genai
 pillow
+reportlab
+arabic-reshaper
+python-bidi
+pandas
+openpyxl
