@@ -33,10 +33,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install "flet[all]" flet-cli supabase google-genai pillow reportlab arabic-reshaper python-bidi pandas openpyxl
 
+      - name: Prepare App Icon
+        run: |
+          mkdir -p assets
+          if [ -f "icon.png" ]; then
+            cp icon.png assets/icon.png
+          fi
+
       - name: Build APK
         run: |
           flutter config --no-analytics
-          flet build apk --project "triple_h" --product "Triple H" --org "com.tripleh.app" --icon icon.png --verbose --yes
+          flet build apk --project "triple_h" --product "Triple H" --org "com.tripleh" --verbose
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
