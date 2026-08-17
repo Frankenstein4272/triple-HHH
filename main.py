@@ -1,26 +1,54 @@
 import os
 import io
+import re
 import json
 import base64
 import datetime
-import urllib.request
 import urllib.parse
+import webbrowser
 import flet as ft
 from supabase import create_client, Client
+from google import genai
+from google.genai import types
 import PIL.Image
+
+import arabic_reshaper
+from bidi.algorithm import get_display
+
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 
 # --- إعدادات Supabase السحابية ---
 SUPABASE_URL = "https://qygefxheemltsaampjbh.supabase.co"
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_publishable_-ra_ou-i5SnqG-aItNPJzg_RtkWYYyC")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# --- إعدادات الذكاء الاصطناعي (Gemini) ---
+# --- إعدادات الذكاء الاصطناعي (Gemini الحديث) ---
 _k_parts = ["AQ.Ab8RN6KIkzTRIuUh", "7FC4cCYVxsS419zLlFu", "RNh6oxaLO5KThzQ"]
 DEFAULT_GEMINI_KEY = "".join(_k_parts)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", DEFAULT_GEMINI_KEY)
 
+ai_client = None
+if GEMINI_API_KEY:
+    try:
+        ai_client = genai.Client(api_key=GEMINI_API_KEY)
+    except Exception:
+        ai_client = None
 
-def main(page: ft.Page):
+
+def reshape_ar(text):
+    if not text:
+        return ""
+    text_str = str(text)
+    reshaped = arabic_reshaper.reshape(text_str)
+    return get_display(reshaped)
+
+
+async def main(page: ft.Page):
     page.title = "Triple H - إدارة الشحنات"
     page.theme_mode = ft.ThemeMode.LIGHT
     page.rtl = True
@@ -32,21 +60,20 @@ def main(page: ft.Page):
     selected_order_id = {"id": None}
     current_orders_data = {"rows": []}
 
-    # عناصر عرض الإحصائيات
-    stat_shipping = ft.Text("0.00 EGP", size=14, weight="bold", color="#1d4ed8")
-    stat_items = ft.Text("0.00 EGP", size=14, weight="bold", color="#b45309")
-    stat_total = ft.Text("0.00 EGP", size=15, weight="bold", color="#047857")
+    stat_shipping = ft.Text("0.00 EGP", size=13, weight="bold", color="#1d4ed8")
+    stat_items = ft.Text("0.00 EGP", size=13, weight="bold", color="#b45309")
+    stat_total = ft.Text("0.00 EGP", size=14, weight="bold", color="#047857")
     stat_count = ft.Text("0", size=15, weight="bold", color="#1e293b")
 
-    # حقول إدخال وتعديل البيانات
     session_date_in = ft.TextField(label="تاريخ الجلسة (YYYY-MM-DD)", value=today_str, text_align=ft.TextAlign.RIGHT)
     code_in = ft.TextField(label="كود الشحنة (تلقائي/يدوي)", text_align=ft.TextAlign.RIGHT)
     name_in = ft.TextField(label="اسم العميل (المستلم)", text_align=ft.TextAlign.RIGHT)
     phone_in = ft.TextField(label="رقم الهاتف", keyboard_type=ft.KeyboardType.PHONE, text_align=ft.TextAlign.RIGHT)
     address_in = ft.TextField(label="العنوان بالتفصيل", text_align=ft.TextAlign.RIGHT)
     courier_in = ft.TextField(label="اسم المندوب", text_align=ft.TextAlign.RIGHT)
-    price_in = ft.TextField(label="سعر الشحنة / المنتج (EGP)", keyboard_type=ft.KeyboardType.NUMBER, text_align=ft.TextAlign.RIGHT, value="0")
-    fee_in = ft.TextField(label="مصاريف الشحن (EGP)", keyboard_type=ft.KeyboardType.NUMBER, text_align=ft.TextAlign.RIGHT, value="0")
+    
+    price_in = ft.TextField(label="سعر المنتج (EGP)", keyboard_type=ft.KeyboardType.NUMBER, text_align=ft.TextAlign.RIGHT, value="0", expand=True)
+    fee_in = ft.TextField(label="الشحن (EGP)", keyboard_type=ft.KeyboardType.NUMBER, text_align=ft.TextAlign.RIGHT, value="0", expand=True)
     notes_in = ft.TextField(label="ملاحظات إضافية", text_align=ft.TextAlign.RIGHT)
 
     status_dd = ft.Dropdown(
@@ -56,11 +83,11 @@ def main(page: ft.Page):
             ft.dropdown.Option("قيد الانتظار"),
             ft.dropdown.Option("مع المندوب"),
             ft.dropdown.Option("تم التسليم بنجاح"),
+            ft.dropdown.Option("لم يتم الرد"),
             ft.dropdown.Option("تم الإلغاء / مرتجع"),
         ]
     )
 
-    # قائمة اختيار الجلسات المنسدلة (Scrollable Dropdown)
     filter_session_dd = ft.Dropdown(
         label="📅 اختيار الجلسة",
         value=f"جلسة اليوم ({today_str})",
@@ -72,15 +99,17 @@ def main(page: ft.Page):
     )
 
     search_in = ft.TextField(label="🔍 بحث (كود، اسم، هاتف، مندوب)", text_align=ft.TextAlign.RIGHT, expand=True)
+    
     filter_status_dd = ft.Dropdown(
         label="الحالة",
         value="كل الحالات",
-        width=130,
+        width=125,
         options=[
             ft.dropdown.Option("كل الحالات"),
             ft.dropdown.Option("قيد الانتظار"),
             ft.dropdown.Option("مع المندوب"),
             ft.dropdown.Option("تم التسليم بنجاح"),
+            ft.dropdown.Option("لم يتم الرد"),
             ft.dropdown.Option("تم الإلغاء / مرتجع"),
         ]
     )
@@ -88,9 +117,9 @@ def main(page: ft.Page):
     loading_indicator = ft.ProgressBar(visible=False, color="#3b82f6")
     orders_list = ft.Column(spacing=10)
 
-    btn_add = ft.ElevatedButton("➕ إضافة أوردر", icon=ft.Icons.ADD, bgcolor="#10b981", color="white", height=45, expand=True)
-    btn_update = ft.ElevatedButton("✏️ حفظ التعديل", icon=ft.Icons.CHECK, bgcolor="#3b82f6", color="white", height=45, visible=False, expand=True)
-    btn_delete = ft.ElevatedButton("🗑️ حذف", icon=ft.Icons.DELETE, bgcolor="#ef4444", color="white", height=45, visible=False)
+    btn_add = ft.Button("➕ إضافة أوردر", icon=ft.Icons.ADD, bgcolor="#10b981", color="white", height=45, expand=True)
+    btn_update = ft.Button("✏️ حفظ التعديل", icon=ft.Icons.CHECK, bgcolor="#3b82f6", color="white", height=45, visible=False, expand=True)
+    btn_delete = ft.Button("🗑️ حذف", icon=ft.Icons.DELETE, bgcolor="#ef4444", color="white", height=45, visible=False)
     btn_clear = ft.OutlinedButton("🔄 تفريغ", height=45)
 
     form_title = ft.Text(" بيانات الأوردر ", weight="bold", size=16, color="#0f766e")
@@ -102,7 +131,6 @@ def main(page: ft.Page):
         page.update()
 
     def update_mobile_sessions():
-        """جلب كل الجلسات السابقة وتعبئة القائمة المنسدلة"""
         try:
             res = supabase.table("orders").select("session_date").order("session_date", desc=True).execute()
             dates = []
@@ -167,24 +195,36 @@ def main(page: ft.Page):
         page.update()
         show_msg(f"تم اختيار الأوردر #{code_in.value} للتعديل", color="#2563eb")
 
-    def open_whatsapp_customer(item):
-        phone = str(item.get("phone") or "").strip().replace(" ", "").replace("-", "")
+    async def launch_url_universal(url: str):
+        try:
+            await ft.UrlLauncher().launch_url(url)
+        except Exception:
+            try:
+                webbrowser.open(url)
+            except Exception:
+                pass
+
+    async def open_whatsapp_customer(item):
+        phone = re.sub(r'\D', '', str(item.get("phone") or ""))
         if not phone:
             show_msg("لا يوجد رقم هاتف مسجل!", color="red")
             return
 
         if phone.startswith("01"):
             phone = "2" + phone
-        elif not phone.startswith("+") and not phone.startswith("20"):
+        elif phone.startswith("1") and len(phone) == 10:
+            phone = "20" + phone
+        elif not phone.startswith("20") and len(phone) >= 10:
             phone = "20" + phone
 
         name = item.get("customer_name") or "العميل العزيز"
         code = item.get("order_code") or ""
         courier = item.get("courier") or "مندوبنا"
         msg = f"مرحباً {name}، شحنتك رقم #{code} في الطريق إليك مع المندوب: {courier}. برجاء التواجد للاستلام."
-        page.launch_url(f"https://wa.me/{phone}?text={urllib.parse.quote(msg)}")
+        url = f"https://wa.me/{phone}?text={urllib.parse.quote(msg)}"
+        await launch_url_universal(url)
 
-    def share_courier_manifest(e=None):
+    async def share_courier_manifest(e=None):
         if not current_orders_data["rows"]:
             show_msg("لا توجد أوردرات معروضة لمشاركتها!", color="orange")
             return
@@ -202,11 +242,135 @@ def main(page: ft.Page):
 
         lines.append(f"💰 *إجمالي تحصيل الجلسة: {total_collect:,.2f} EGP*")
         full_text = "\n".join(lines)
-        page.launch_url(f"https://wa.me/?text={urllib.parse.quote(full_text)}")
+        url = f"https://wa.me/?text={urllib.parse.quote(full_text)}"
+        await launch_url_universal(url)
 
-    # --- معالجة وقراءة الصورة عبر AI ---
+    # --- دالة تصدير كشف PDF للمندوب على الموبايل ---
+    def export_courier_pdf_mobile(e=None):
+        if not current_orders_data["rows"]:
+            show_msg("لا توجد أوردرات لتصديرها!", color="orange")
+            return
+
+        try:
+            # تحديد مسار حفظ الـ PDF (مجلد Downloads أو المجلد الحالي)
+            downloads_path = os.path.join(os.path.expanduser("~"), "Downloads")
+            if not os.path.exists(downloads_path):
+                downloads_path = os.getcwd()
+
+            time_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            file_name = f"Triple_H_Manifest_{time_str}.pdf"
+            file_path = os.path.join(downloads_path, file_name)
+
+            # تسجيل الخطوط المتوفرة
+            font_candidates = [
+                "C:\\Windows\\Fonts\\arial.ttf",
+                "C:\\Windows\\Fonts\\tahoma.ttf",
+                "/system/fonts/NotoNaskhArabic-Regular.ttf",
+                "/system/fonts/NotoSansArabic-Regular.ttf",
+                "/system/fonts/DroidSansArabic.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+            ]
+
+            font_name = 'Helvetica'
+            font_bold_name = 'Helvetica-Bold'
+
+            for fc in font_candidates:
+                if os.path.exists(fc):
+                    try:
+                        pdfmetrics.registerFont(TTFont('ArabicFont', fc))
+                        font_name = 'ArabicFont'
+                        font_bold_name = 'ArabicFont'
+                        break
+                    except Exception:
+                        continue
+
+            doc = SimpleDocTemplate(file_path, pagesize=A4, rightMargin=15, leftMargin=15, topMargin=15, bottomMargin=15)
+            elements = []
+            styles = getSampleStyleSheet()
+
+            sess_info = filter_session_dd.value or "جميع الجلسات"
+            title_style = ParagraphStyle(
+                name="TitleStyleMobile",
+                fontName=font_bold_name,
+                fontSize=14,
+                leading=18,
+                alignment=1,
+                textColor=colors.HexColor("#1e293b")
+            )
+
+            elements.append(Paragraph(reshape_ar(f"Triple H - كشف تسليم شحنات المندوب ({sess_info})"), title_style))
+            elements.append(Spacer(1, 10))
+
+            table_data = [[
+                reshape_ar("الملاحظات"),
+                reshape_ar("المطلوب تحصيله"),
+                reshape_ar("الشحن"),
+                reshape_ar("سعر المنتج"),
+                reshape_ar("الهاتف"),
+                reshape_ar("العنوان"),
+                reshape_ar("اسم العميل"),
+                reshape_ar("كود الشحنة")
+            ]]
+
+            total_items_sum = 0.0
+            total_shipping_sum = 0.0
+            grand_total_sum = 0.0
+
+            for r in current_orders_data["rows"]:
+                item_p = float(r.get('item_price') or 0)
+                ship_f = float(r.get('shipping_fee') or 0)
+                tot = item_p + ship_f
+
+                total_items_sum += item_p
+                total_shipping_sum += ship_f
+                grand_total_sum += tot
+
+                table_data.append([
+                    reshape_ar(str(r.get('notes') or '-')),
+                    f"{tot:.2f} EGP",
+                    f"{ship_f:.2f}",
+                    f"{item_p:.2f}",
+                    str(r.get('phone') or ''),
+                    reshape_ar(str(r.get('address') or '')[:22]),
+                    reshape_ar(str(r.get('customer_name') or '')[:18]),
+                    str(r.get('order_code') or '')
+                ])
+
+            table_data.append([
+                reshape_ar("إجمالي الجلسة"),
+                f"{grand_total_sum:.2f} EGP",
+                f"{total_shipping_sum:.2f}",
+                f"{total_items_sum:.2f}",
+                "", "", "", ""
+            ])
+
+            t = Table(table_data, colWidths=[65, 75, 50, 55, 75, 120, 80, 50])
+            t.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1e293b')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), font_bold_name),
+                ('FONTNAME', (0, 1), (-1, -1), font_name),
+                ('FONTSIZE', (0, 0), (-1, 0), 8.5),
+                ('FONTSIZE', (0, 1), (-1, -2), 7.5),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 5),
+                ('TOPPADDING', (0, 0), (-1, -1), 4),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#cbd5e1')),
+                ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#f1f5f9')),
+                ('FONTNAME', (0, -1), (-1, -1), font_bold_name),
+                ('TEXTCOLOR', (1, -1), (1, -1), colors.HexColor('#047857')),
+            ]))
+
+            elements.append(t)
+            doc.build(elements)
+            show_msg(f"تم حفظ ملف PDF بنجاح في التنزيلات ✅\n{file_name}", color="#15803d")
+
+        except Exception as ex:
+            show_msg(f"خطأ أثناء تصدير PDF: {ex}", color="red")
+
+    # --- معالجة وقراءة الصورة عبر حزمة google.genai الرسمية ---
     def process_image_with_ai(file_path=None, file_bytes=None):
-        if not GEMINI_API_KEY:
+        if not ai_client:
             show_msg("مفتاح Gemini غير مفعل!", color="red")
             return
 
@@ -222,88 +386,42 @@ def main(page: ft.Page):
                 show_msg("لم يتم العثور على ملف الصورة", color="red")
                 return
 
+            img.thumbnail((1024, 1024), PIL.Image.Resampling.LANCZOS)
             buffered = io.BytesIO()
-            img.save(buffered, format="JPEG", quality=85)
-            img_b64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+            img.save(buffered, format="JPEG", quality=80, optimize=True)
+            img_bytes_compressed = buffered.getvalue()
 
             prompt_text = """
-            أنت مساعد ذكي لاستخراج بيانات شحنات التوصيل وبوالص الشحن.
-            استخرج البيانات بصيغة JSON فقط:
+            أنت خبير قراءة واستخراج بيانات بوالص وشحنات الشحن والتوصيل المكتوبة باللغة العربية (خط يد أو مطبوعة).
+            استخراج البيانات التالية بدقة شديدة على شكل JSON فقط:
             {
-                "order_code": "كود الشحنة أو رقم البوليصة إن وجد",
-                "customer_name": "اسم العميل المستلم",
-                "phone": "رقم الهاتف",
-                "address": "العنوان بالتفصيل",
+                "order_code": "رقم البوليصة أو كود الشحنة إن وجد",
+                "customer_name": "اسم العميل أو المستلم",
+                "phone": "رقم الهاتف أو الموبايل",
+                "address": "العنوان بالتفصيل المحافظة والمنطقة والشارع",
                 "item_price": 0,
                 "shipping_fee": 0,
-                "notes": "أي ملاحظات إضافية على الطرد"
+                "notes": "أي ملاحظات إضافية على الطرد أو المحتويات"
             }
             إذا لم تجد قيمة لحقل معين اجعل قيمته نص فارغ "" أو 0 للمبالغ.
             """
 
-            payload = {
-                "contents": [
-                    {
-                        "parts": [
-                            {"text": prompt_text},
-                            {
-                                "inline_data": {
-                                    "mime_type": "image/jpeg",
-                                    "data": img_b64
-                                }
-                            }
-                        ]
-                    }
-                ]
-            }
-
-            target_models = [
-                "models/gemini-2.0-flash",
-                "models/gemini-1.5-flash",
-                "models/gemini-1.5-flash-8b",
-                "models/gemini-1.5-pro",
-                "models/gemini-pro"
-            ]
-
-            response_json = None
-            last_err_msg = ""
-
-            for full_model_name in target_models:
-                clean_name = full_model_name.replace("models/", "")
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{clean_name}:generateContent?key={GEMINI_API_KEY}"
-                req = urllib.request.Request(
-                    url,
-                    data=json.dumps(payload).encode("utf-8"),
-                    headers={"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY}
+            response = ai_client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=[
+                    types.Part.from_bytes(data=img_bytes_compressed, mime_type='image/jpeg'),
+                    prompt_text
+                ],
+                config=types.GenerateContentConfig(
+                    temperature=0.0,
+                    response_mime_type="application/json"
                 )
+            )
 
-                try:
-                    with urllib.request.urlopen(req, timeout=30) as resp:
-                        if resp.status == 200:
-                            response_json = json.loads(resp.read().decode("utf-8"))
-                            break
-                except Exception as err:
-                    last_err_msg = str(err)
-                    continue
-
-            if not response_json:
-                raise Exception(f"فشل الاتصال: {last_err_msg}")
-
-            candidates = response_json.get("candidates", [])
-            if not candidates:
-                raise Exception("رد الذكاء الاصطناعي فارغ")
-            
-            parts = candidates[0].get("content", {}).get("parts", [])
-            raw_text = parts[0].get("text", "").strip()
-
-            if raw_text.startswith("```json"):
-                raw_text = raw_text[7:]
-            if raw_text.startswith("```"):
-                raw_text = raw_text[3:]
-            if raw_text.endswith("```"):
-                raw_text = raw_text[:-3]
-
-            data = json.loads(raw_text.strip())
+            raw_text = response.text.strip()
+            json_match = re.search(r'\{.*\}', raw_text, re.DOTALL)
+            clean_json_str = json_match.group(0) if json_match else raw_text
+            data = json.loads(clean_json_str)
 
             if data.get("order_code"):
                 code_in.value = str(data.get("order_code"))
@@ -344,7 +462,6 @@ def main(page: ft.Page):
         except Exception as ex:
             show_msg("خطأ في مستعرض الصور: " + str(ex), color="red")
 
-    # --- جلب البيانات مع الفلترة بالجلسة ---
     def load_orders(e=None):
         orders_list.controls.clear()
         selected_sess = filter_session_dd.value
@@ -396,10 +513,21 @@ def main(page: ft.Page):
             else:
                 for item in rows:
                     status = item.get('status', 'قيد الانتظار')
-                    bg_col = "#fef3c7" if status == "قيد الانتظار" else ("#dbeafe" if status == "مع المندوب" else ("#dcfce7" if status == "تم التسليم بنجاح" else "#fee2e2"))
+                    
+                    bg_col = (
+                        "#fef3c7" if status == "قيد الانتظار"
+                        else ("#dbeafe" if status == "مع المندوب"
+                        else ("#dcfce7" if status == "تم التسليم بنجاح"
+                        else ("#ffedd5" if status == "لم يتم الرد"
+                        else "#fee2e2")))
+                    )
+                    
                     price = float(item.get('item_price') or 0)
                     fee = float(item.get('shipping_fee') or 0)
                     total = price + fee
+
+                    async def handle_wa(e, itm=item):
+                        await open_whatsapp_customer(itm)
 
                     card = ft.Card(
                         elevation=3,
@@ -433,13 +561,13 @@ def main(page: ft.Page):
                                 ft.Text("📝 ملاحظات: " + str(item.get('notes', '-')), size=11, italic=True),
 
                                 ft.Row([
-                                    ft.ElevatedButton(
+                                    ft.Button(
                                         "💬 واتساب",
                                         icon=ft.Icons.CHAT,
                                         bgcolor="#25d366",
                                         color="white",
                                         height=36,
-                                        on_click=lambda e, itm=item: open_whatsapp_customer(itm)
+                                        on_click=handle_wa
                                     ),
                                     ft.OutlinedButton(
                                         "✏️ تعديل",
@@ -609,7 +737,7 @@ def main(page: ft.Page):
             ft.Container(
                 padding=10,
                 content=ft.Column([
-                    ft.ElevatedButton(
+                    ft.Button(
                         "📷 تصوير / رفع صورة البوليصة (AI Scan)",
                         icon=ft.Icons.CAMERA_ALT,
                         bgcolor="#3b82f6",
@@ -637,7 +765,8 @@ def main(page: ft.Page):
                 ft.Divider(),
                 ft.Row([
                     filter_session_dd,
-                    ft.ElevatedButton("📋 كشف واتساب", icon=ft.Icons.SHARE, bgcolor="#0284c7", color="white", on_click=share_courier_manifest)
+                    ft.Button("📄 كشف PDF", icon=ft.Icons.PICTURE_AS_PDF, bgcolor="#dc2626", color="white", on_click=export_courier_pdf_mobile),
+                    ft.Button("📋 كشف واتساب", icon=ft.Icons.SHARE, bgcolor="#0284c7", color="white", on_click=share_courier_manifest)
                 ]),
                 ft.Row([search_in, filter_status_dd]),
                 ft.Row([
@@ -654,4 +783,4 @@ def main(page: ft.Page):
 
 
 if __name__ == "__main__":
-    ft.app(target=main)
+    ft.run(main)
