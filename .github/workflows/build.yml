@@ -18,7 +18,7 @@ jobs:
           python-version: "3.11"
 
       - name: Setup Java JDK
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
@@ -43,7 +43,7 @@ jobs:
       - name: Build APK
         run: |
           flutter config --no-analytics
-          flet build apk --project-name "triple_h" --product-name "Triple H" --yes --verbose
+          flet build apk --project "triple_h" --product "Triple H" --org "com.tripleh" --permissions camera photo_library --yes
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
