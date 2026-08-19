@@ -114,7 +114,7 @@ async def main(page: ft.Page):
     filter_status_dd = ft.Dropdown(
         label="الحالة",
         value="كل الحالات",
-        width=130,
+        width=125,
         options=[
             ft.dropdown.Option("كل الحالات"),
             ft.dropdown.Option("قيد الانتظار"),
@@ -237,55 +237,111 @@ async def main(page: ft.Page):
         except Exception:
             pass
 
-    async def share_courier_manifest(e=None):
-        if not current_orders_data["rows"]:
-            show_msg("لا توجد أوردرات معروضة لمشاركتها!", color="orange")
-            return
-
-        sess_name = filter_session_dd.value or "جميع الجلسات"
-        lines = [f"📦 *كشف تسليم شحنات ({sess_name}) - Triple H*", "-------------------------"]
-        total_collect = 0.0
-        for idx, r in enumerate(current_orders_data["rows"], 1):
-            tot = float(r.get('item_price') or 0) + float(r.get('shipping_fee') or 0)
-            total_collect += tot
-            lines.append(f"{idx}) #{r.get('order_code')} - {r.get('customer_name')} ({r.get('company_name', 'عام')})")
-            lines.append(f"📞 {r.get('phone')} | 📍 {r.get('address')}")
-            lines.append(f"💵 المطلوب: {tot:.2f} EGP")
-            lines.append("-------------------------")
-
-        lines.append(f"💰 *إجمالي تحصيل الجلسة: {total_collect:,.2f} EGP*")
-        full_text = "\n".join(lines)
-        url = f"https://wa.me/?text={urllib.parse.quote(full_text)}"
-        try:
-            webbrowser.open(url)
-        except Exception:
-            pass
-
-    async def share_returns_manifest(e=None):
+    # --- تصدير كشف المرتجعات PDF على الموبايل ---
+    def export_returns_pdf_mobile(e=None):
         return_rows = [r for r in current_orders_data["rows"] if r.get('status') == 'تم الإلغاء / مرتجع']
         if not return_rows:
-            show_msg("لا توجد أوردرات مرتجعة معروضة!", color="orange")
+            show_msg("لا توجد أوردرات مرتجعة معروضة حالياً لتصديرها!", color="orange")
             return
 
-        comp_name = filter_company_dd.value
-        lines = [f"📦 *كشف تسليم مرتجعات ({comp_name}) - Triple H*", "-------------------------"]
-        total_goods = 0.0
-        for idx, r in enumerate(return_rows, 1):
-            p = float(r.get('item_price') or 0)
-            total_goods += p
-            lines.append(f"{idx}) كود: #{r.get('order_code')} | العميل: {r.get('customer_name')}")
-            lines.append(f"🏢 الشركة: {r.get('company_name', 'عام')} | 💰 ثمن القطعة: {p:.2f} EGP")
-            lines.append(f"📝 السبب: {r.get('notes', '-')}")
-            lines.append("-------------------------")
+        company_name = filter_company_dd.value
+        if company_name == "كل الشركات":
+            company_name = "مرتجعات الشركات المجمعة"
 
-        lines.append(f"💰 *إجمالي قيمة بضاعة المرتجع: {total_goods:,.2f} EGP*")
-        full_text = "\n".join(lines)
-        url = f"https://wa.me/?text={urllib.parse.quote(full_text)}"
         try:
-            webbrowser.open(url)
-        except Exception:
-            pass
+            downloads_path = os.path.join(os.path.expanduser("~"), "Downloads")
+            if not os.path.exists(downloads_path):
+                downloads_path = os.getcwd()
 
+            time_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            file_name = f"Triple_H_Returns_{time_str}.pdf"
+            file_path = os.path.join(downloads_path, file_name)
+
+            font_candidates = [
+                "C:\\Windows\\Fonts\\arial.ttf",
+                "C:\\Windows\\Fonts\\tahoma.ttf",
+                "/system/fonts/NotoNaskhArabic-Regular.ttf",
+                "/system/fonts/NotoSansArabic-Regular.ttf"
+            ]
+
+            font_name, font_bold_name = 'Helvetica', 'Helvetica-Bold'
+            for fc in font_candidates:
+                if os.path.exists(fc):
+                    try:
+                        pdfmetrics.registerFont(TTFont('ArabicFont', fc))
+                        font_name, font_bold_name = 'ArabicFont', 'ArabicFont'
+                        break
+                    except Exception:
+                        continue
+
+            doc = SimpleDocTemplate(file_path, pagesize=A4, rightMargin=15, leftMargin=15, topMargin=15, bottomMargin=15)
+            elements = []
+            styles = getSampleStyleSheet()
+
+            title_style = ParagraphStyle(
+                name="TitleStyleRetMob",
+                fontName=font_bold_name,
+                fontSize=14,
+                leading=18,
+                alignment=1,
+                textColor=colors.HexColor("#c2410c")
+            )
+            elements.append(Paragraph(reshape_ar(f"Triple H - كشف تسليم مرتجعات ({company_name})"), title_style))
+            elements.append(Spacer(1, 10))
+
+            table_data = [[
+                reshape_ar("سبب الإلغاء / ملاحظات"),
+                reshape_ar("سعر البضاعة"),
+                reshape_ar("رقم الهاتف"),
+                reshape_ar("اسم العميل"),
+                reshape_ar("الشركة / المتجر"),
+                reshape_ar("كود الشحنة")
+            ]]
+
+            total_goods_sum = 0.0
+            for r in return_rows:
+                item_p = float(r.get('item_price') or 0)
+                total_goods_sum += item_p
+                table_data.append([
+                    reshape_ar(str(r.get('notes') or '-')),
+                    f"{item_p:.2f} EGP",
+                    str(r.get('phone') or ''),
+                    reshape_ar(str(r.get('customer_name') or '')[:20]),
+                    reshape_ar(str(r.get('company_name') or '')[:16]),
+                    str(r.get('order_code') or '')
+                ])
+
+            table_data.append([
+                reshape_ar("إجمالي قيمة البضاعة المستردة"),
+                f"{total_goods_sum:.2f} EGP",
+                "", "", "", ""
+            ])
+
+            t = Table(table_data, colWidths=[175, 85, 80, 95, 75, 55])
+            t.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#c2410c')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), font_bold_name),
+                ('FONTNAME', (0, 1), (-1, -1), font_name),
+                ('FONTSIZE', (0, 0), (-1, 0), 8.5),
+                ('FONTSIZE', (0, 1), (-1, -1), 8),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 5),
+                ('TOPPADDING', (0, 0), (-1, -1), 4),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#fed7aa')),
+                ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#ffedd5')),
+                ('FONTNAME', (0, -1), (-1, -1), font_bold_name),
+                ('TEXTCOLOR', (1, -1), (1, -1), colors.HexColor('#c2410c')),
+            ]))
+
+            elements.append(t)
+            doc.build(elements)
+            show_msg(f"تم حفظ كشف المرتجعات PDF بنجاح في التنزيلات ✅\n{file_name}", color="#c2410c")
+
+        except Exception as ex:
+            show_msg(f"خطأ أثناء تصدير PDF: {ex}", color="red")
+
+    # --- تصدير كشف تسليم المندوب PDF على الموبايل ---
     def export_courier_pdf_mobile(e=None):
         if not current_orders_data["rows"]:
             show_msg("لا توجد أوردرات لتصديرها!", color="orange")
@@ -387,7 +443,7 @@ async def main(page: ft.Page):
 
             elements.append(t)
             doc.build(elements)
-            show_msg(f"تم حفظ ملف PDF بنجاح في التنزيلات ✅\n{file_name}", color="#15803d")
+            show_msg(f"تم حفظ كشف التسليم PDF بنجاح في التنزيلات ✅\n{file_name}", color="#15803d")
 
         except Exception as ex:
             show_msg(f"خطأ أثناء تصدير PDF: {ex}", color="red")
@@ -803,7 +859,7 @@ async def main(page: ft.Page):
                     filter_company_dd
                 ]),
                 ft.Row([
-                    ft.Button("📦 كشف مرتجعات واتساب", icon=ft.Icons.SHARE, bgcolor="#ea580c", color="white", on_click=share_returns_manifest, expand=True),
+                    ft.Button("📦 كشف مرتجعات PDF", icon=ft.Icons.PICTURE_AS_PDF, bgcolor="#ea580c", color="white", on_click=export_returns_pdf_mobile, expand=True),
                     ft.Button("📄 كشف تسليم PDF", icon=ft.Icons.PICTURE_AS_PDF, bgcolor="#dc2626", color="white", on_click=export_courier_pdf_mobile, expand=True),
                 ]),
                 ft.Row([search_in, filter_status_dd]),
